@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 
 	"github.com/gk7790/gk-zap/pkg/config"
@@ -70,20 +69,20 @@ func Execute() {
 
 func runServer(cfg *m.ServerConfig) (err error) {
 	// 初始化 logger
-	log.Init(false, "", slog.LevelDebug) // false=不写文件, false=Text格式
+	log.Init(false, "", log.LevelDebug) // false=不写文件, false=Text格式
 
 	if cfgFile != "" {
-		slog.Info("gks uses config file: %s", cfgFile)
+		log.Infof("gks uses config file: %s", cfgFile)
 	} else {
-		slog.Info("gks uses command line arguments for config")
+		log.Infof("gks uses command line arguments for config")
 	}
 
 	svr, err := server.NewService(cfg)
 	if err != nil {
 		return err
 	}
-	slog.Info("gks started successfully")
-	
+	log.Warnf("gks started successfully")
+
 	// 启动服务，并使用一个“永不取消”的根上下文作为运行环境。
 	svr.Run(context.Background())
 	return nil

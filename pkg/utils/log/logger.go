@@ -12,18 +12,54 @@ import (
 	"time"
 )
 
-// SimpleHandler 是自定义的 slog.Handler，用于输出类似 frp 风格的日志。
-type SimpleHandler struct {
-	out   io.Writer
-	opts  *slog.HandlerOptions
-	mu    sync.Mutex
-	level slog.Leveler // 可为 nil，默认 info
+var (
+	LevelDebug = slog.LevelDebug
+	LevelInfo  = slog.LevelInfo
+	LevelWarn  = slog.LevelWarn
+	LevelError = slog.LevelError
+)
+
+// ----------------- 全局封装 -----------------
+
+var std *slog.Logger
+
+// Init 初始化全局 logger。
+// toFile: 是否写入文件；filePath: 文件路径（当 toFile 为 true 时生效）
+func Init(toFile bool, filePath string, level slog.Level) *slog.Logger {
+	var out io.Writer
+	if toFile {
+		// 打开文件（简单实现，不做切割）
+		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			panic(err)
+		}
+		out = io.MultiWriter(os.Stdout, f)
+	} else {
+		out = os.Stdout
+	}
+
+	opts := &slog.HandlerOptions{Level: level}
+	h := NewSimpleHandler(out, opts, 3)
+	std = slog.New(h)
+	// 让 package-level slog.* 调用使用我们初始化的 logger（可选）
+	slog.SetDefault(std)
+	return std
 }
 
-func NewSimpleHandler(out io.Writer, opts *slog.HandlerOptions) *SimpleHandler {
+// SimpleHandler 是自定义的 slog.Handler，用于输出类似 frp 风格的日志。
+type SimpleHandler struct {
+	out        io.Writer
+	opts       *slog.HandlerOptions
+	mu         sync.Mutex
+	level      slog.Leveler // 可为 nil，默认 info
+	callerSkip int
+}
+
+func NewSimpleHandler(out io.Writer, opts *slog.HandlerOptions, callerSkip int) *SimpleHandler {
 	h := &SimpleHandler{
-		out:  out,
-		opts: opts,
+		out:        out,
+		opts:       opts,
+		callerSkip: callerSkip,
 	}
 	if opts != nil && opts.Level != nil {
 		h.level = opts.Level
@@ -113,24 +149,15 @@ func (h *SimpleHandler) Handle(ctx context.Context, r slog.Record) error {
 	b.WriteString(levelShort(r.Level))
 	b.WriteString("] ")
 
-	// 源码位置（使用 r.PC）
-	if r.PC != 0 {
-		frames := runtime.CallersFrames([]uintptr{r.PC})
-		if f, _ := frames.Next(); f.Func != nil {
-			// 把绝对路径尽量转为相对或仅文件名
-			file := f.File
-			// 尝试只保留最后两段路径（例如 frps/root.go）
-			parts := strings.Split(file, "/")
-			if len(parts) > 2 {
-				file = strings.Join(parts[len(parts)-2:], "/")
-			}
-			b.WriteString("[")
-			b.WriteString(file)
-			b.WriteString(fmt.Sprintf(":%d", f.Line))
-			b.WriteString("] ")
+	// 调整 skip 数，确保拿到业务调用方
+	_, file, line, ok := runtime.Caller(h.callerSkip + 2)
+	if ok {
+		parts := strings.Split(file, "/")
+		if len(parts) > 2 {
+			file = strings.Join(parts[len(parts)-2:], "/")
 		}
+		b.WriteString(fmt.Sprintf("[%s:%d] ", file, line))
 	} else {
-		// 如果没有 PC，仍然输出一对空的中括号以保持格式一致（可选）
 		b.WriteString("[unknown:0] ")
 	}
 
@@ -166,31 +193,18 @@ func (h *SimpleHandler) Handle(ctx context.Context, r slog.Record) error {
 	return err
 }
 
-// ----------------- 全局封装 -----------------
+func Infof(format string, v ...any) {
+	std.Info(fmt.Sprintf(format, v...))
+}
 
-var std *slog.Logger
+func Warnf(format string, v ...any) {
+	std.Warn(fmt.Sprintf(format, v...))
+}
 
-// Init 初始化全局 logger。
-// toFile: 是否写入文件；filePath: 文件路径（当 toFile 为 true 时生效）
-func Init(toFile bool, filePath string, level slog.Level) *slog.Logger {
-	var out io.Writer
-	if toFile {
-		// 打开文件（简单实现，不做切割）
-		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			panic(err)
-		}
-		out = io.MultiWriter(os.Stdout, f)
-	} else {
-		out = os.Stdout
-	}
+func Errorf(format string, v ...any) {
+	std.Error(fmt.Sprintf(format, v...))
+}
 
-	opts := &slog.HandlerOptions{
-		Level: level,
-	}
-	h := NewSimpleHandler(out, opts)
-	std = slog.New(h)
-	// 让 package-level slog.* 调用使用我们初始化的 logger（可选）
-	slog.SetDefault(std)
-	return std
+func Debugf(format string, v ...any) {
+	std.Debug(fmt.Sprintf(format, v...))
 }
